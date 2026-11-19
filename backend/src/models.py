@@ -47,6 +47,7 @@ class ConflictCheck(Base):
     at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
 class Triage(Base):
     __tablename__='triages'
+    __table_args__=(CheckConstraint("status in ('queued','running','done','reviewed','invalid','failed')"),)
     id:Mapped[int]=mapped_column(primary_key=True)
     intake_id:Mapped[int]=mapped_column(ForeignKey('intakes.id'))
     facts_version:Mapped[int]=mapped_column(Integer)
@@ -58,6 +59,31 @@ class Triage(Base):
     review_note:Mapped[str]=mapped_column(String(200),default='')
     metrics:Mapped[dict]=mapped_column(JSON,default=dict)
     error:Mapped[str]=mapped_column(String(200),default='')
+    invalid_reason:Mapped[str]=mapped_column(String(200),default='')
+    recomputed_from:Mapped[int|None]=mapped_column(ForeignKey('triages.id'),nullable=True)
+class TrainingSample(Base):
+    __tablename__='training_samples'
+    __table_args__=(UniqueConstraint('intake_id'),
+                    CheckConstraint("status in ('active','revoked')"),
+                    CheckConstraint("(status='active' AND revoked_at IS NULL) OR (status='revoked' AND revoked_at IS NOT NULL)"))
+    id:Mapped[int]=mapped_column(primary_key=True)
+    intake_id:Mapped[int]=mapped_column(ForeignKey('intakes.id'))
+    topic:Mapped[str]=mapped_column(String(20))
+    status:Mapped[str]=mapped_column(String(20),default='active')
+    basis:Mapped[str]=mapped_column(String(200),default='')
+    revoked_at:Mapped[datetime|None]=mapped_column(DateTime(timezone=True),nullable=True)
+    at:Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
+class TriageSample(Base):
+    __tablename__='triage_samples'
+    __table_args__=(UniqueConstraint('triage_id','sample_id'),)
+    id:Mapped[int]=mapped_column(primary_key=True)
+    triage_id:Mapped[int]=mapped_column(ForeignKey('triages.id'))
+    sample_id:Mapped[int]=mapped_column(ForeignKey('training_samples.id'))
+    intake_id:Mapped[int]=mapped_column(ForeignKey('intakes.id'))
+    topic:Mapped[str]=mapped_column(String(20))
+    status_at_snapshot:Mapped[str]=mapped_column(String(20))
+    excluded:Mapped[bool]=mapped_column(Boolean,default=False)
+    exclude_reason:Mapped[str]=mapped_column(String(200),default='')
 class Requirement(Base):
     __tablename__='requirements'
     __table_args__=(UniqueConstraint('topic','code'),)

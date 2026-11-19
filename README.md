@@ -8,7 +8,7 @@
 
 - 来访授权：化名、模拟事实和版本、授权依据；新卷默认未授权。修改事实使旧主题复核失效。撤回授权立即终止待受理或已受理转介，释放承接位，保留服务历史。
 - 双方冲突：来访方与相对方关联到归一化当事人（NFKC、空格和大小写归一）；候选机构已有在途对立方时阻止转介；发信与签收均重新核验。
-- 主题专长：真实 Redis worker 运行 TF-IDF + MultinomialNB，劳动/住房/消费三主题；低于68%明确退回人工，所有结果均需主管复核才可转介。
+- 主题专长：仅主管确认过的卷宗可登记为训练样本，真实 Redis worker 用样本脱敏文本跑 TF-IDF + MultinomialNB，劳动/住房/消费三主题；同归一化来访方的旧卷自动隔离，送分流时锁定当批样本并留痕。样本卷撤回授权后，排队/计算中/待复核建议立即作废，已确认建议失效并只用原批其余合资格样本重算；低于68%明确退回人工，所有结果仍需主管复核。
 - 材料补正：按复核主题给出两项必需清单，提交脱敏文件索引后由主管通过或退回。补正重新提交会清除旧通过状态。
 - 机构承接：机构专长和并发承接位约束；发信占位，撤回和销案释放；同卷只保留一条在途转介，机构受理回执需主管登记。
 - 工时销案：已受理才可登记1–480分钟服务片段，累计工时大于零后主管回访销案。销案卷宗只读，保留回访满意度和总时长。
@@ -45,9 +45,17 @@ JWT有效8小时。演示账户、密码和数据仅用于本地行政流程试�
 
 ## 算法口径
 
-`backend/src/algorithm.py` 生成108条三主题模板合成文本，以字符2–3 gram TF-IDF和 MultinomialNB(alpha=0.5) 分类。固定seed34按主题分层留出27条，训练81条，真实计算宏F1与三乘三混淆矩阵；行是实际主题，列是预测主题，劳动/住房/消费顺序。worker把预测、最高类别概率、低置信标记、指标和样本SHA256写入关系表，并在共享artifacts卷留存指标JSON。
+`backend/src/algorithm.py` 保留108条三主题模板的旧版合成分类 `classify`（仅供种子演示对照），正式分流改走 `fit_bundle/apply_bundle`：以主管确认卷宗样本的脱敏文本为训练集，沿用字符2–3 gram TF-IDF和 MultinomialNB(alpha=0.5)，按合资格样本做留一交叉验证，输出宏F1、三乘三混淆矩阵（行实际、列预测，劳动/住房/消费顺序）、标签计数和样本集SHA256。worker把预测、最高类别概率、低置信标记、指标和样本编号写入关系表，并在共享artifacts卷留存指标JSON。
 
-这些模板包含近似表述，留出分数只能证明内部可复现性，不能视为真实接待效果或法律可靠性。低置信强制人工，主管有权改判主题。没有授权不允许提交新识别；事实版本不符的任务会失败或无法复核，可重新排队恢复。
+样本治理（`training_service.py` 与 `triage_service.py`）：
+
+1. 只有当前事实版本存在主管已确认建议、且授权有效的卷宗，主管才能登记 `TrainingSample`；撤回后可在重新授权并复核后重新纳入。
+2. 入队即定样本：合资格口径为样本有效 + 样本卷授权仍在 + 与目标卷非同归一化来访方（按 `CaseParty` 的 client 归一化当事人比对），至少覆盖两个主题才允许训练；每条采用样本写入 `TriageSample` 快照，之后样本再变动不改写历史快照。
+3. 样本卷撤回授权（授权页操作）时：排队、计算中、待复核的分流一律置 `invalid` 且不能送审；已确认建议置 `invalid` 并以原批其余合资格样本自动派生重算任务（`recomputed_from` 串链），剩余样本不足两个主题时不自动重算并在旧建议注明。重算快照保留原批全部编号，撤回卷标 `excluded` 与排除原因。
+4. worker出队和主管复核前都重新核验授权与快照；撤回与训练并发时，已算完的旧建议在复核门被拦截作废，不会送审。
+5. 留痕接口 `GET /triages/{id}/trace` 与分流页面可查每条建议实际用过哪些样本卷宗编号、当前是否仍有效、排除/重算原因及父子重算链；留痕只保留卷宗编号和主题，不显示撤回卷的事实原话。
+
+样本量很小时留一分数波动很大，只能证明内部可复现性，不能视为真实接待效果或法律可靠性。低置信强制人工，主管有权改判主题。没有授权不允许提交新识别；事实版本不符的任务会失败或无法复核，可重新排队恢复。
 
 ## 结构和事务
 
@@ -55,7 +63,7 @@ JWT有效8小时。演示账户、密码和数据仅用于本地行政流程试�
 |---|---|
 | backend/src/models.py、schemas.py | Intake/Consent、Party/CaseParty/ConflictCheck、Triage、Requirement/Document、Agency/Referral、ServiceLog/Closure关系约束及输入契约 |
 | intake_service.py、conflict_service.py | 授权撤回、事实版本、双方归一与机构对照 |
-| triage_service.py、algorithm.py、worker.py | 行政主题排队、实算和主管复核 |
+| triage_service.py、training_service.py、algorithm.py、worker.py | 样本册登记与撤回、同来访方隔离、分流快照留痕、失效重算、实算和主管复核 |
 | document_service.py、referral_service.py、closure_service.py | 材料补正、容量事务、机构回执和工时销案 |
 | common.py、auth.py、middlewares.py | 卷宗根锁、JWT角色、动作审计、请求追踪、突发限流 |
 | frontend/src/pages/ | 六个独立可操作页面，无前端框架 |
@@ -70,7 +78,7 @@ JWT有效8小时。演示账户、密码和数据仅用于本地行政流程试�
 
 `.env.example` 列出COMPOSE_PROJECT_NAME、三端口、COMPOSE_SUBNET、JWT_SECRET和SEED_DEMO。`.env`忽略提交。启动SEED_DEMO=true自动导入自然键缺失项；重复执行不覆盖手工修改、不重复增加机构active_count。
 
-后端使用Python3.12、FastAPI、SQLAlchemy、PyMySQL、scikit-learn，前端Nginx托管原生ES modules。开发时在虚拟环境安装backend/requirements.txt，设置DATABASE_URL和REDIS_URL，在backend目录运行`uvicorn src.app:app --reload`；前端不需要Node构建。Google Fonts为Noto Sans SC和ZCOOL XiaoWei，离线时采用sans-serif/serif回退。
+后端使用Python3.12、FastAPI、SQLAlchemy、PyMySQL、scikit-learn，前端Nginx托管原生ES modules。开发时在虚拟环境安装backend/requirements.txt，设置DATABASE_URL和REDIS_URL，在backend目录运行`uvicorn src.app:app --reload`；前端不需要Node构建。测试安装backend/requirements-dev.txt后，用SQLite与fakeredis运行`python -m pytest`（13个用例覆盖样本登记、同来访方隔离、撤回作废、并发复核拦截、重算链与留痕），`tests/e2e_smoke.py`是种子数据下的端到端冒烟脚本。Google Fonts为Noto Sans SC和ZCOOL XiaoWei，离线时采用sans-serif/serif回退。
 
 `docker compose logs -f backend worker`读取运行日志；`docker compose down -v --remove-orphans`清理本项目并删除演示数据。工作区`test-artifacts/gb-1034/`保存真实API、强制并发、权限和Chrome证据，不混入源码。
 

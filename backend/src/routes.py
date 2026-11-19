@@ -6,7 +6,7 @@ from .models import *
 from .schemas import *
 from .auth import current,editor,supervisor,issue,password_hash
 from .common import dump
-from . import intake_service as intake,conflict_service as conflict,triage_service as triage,document_service as document,referral_service as referral,closure_service as closure
+from . import intake_service as intake,conflict_service as conflict,triage_service as triage,document_service as document,referral_service as referral,closure_service as closure,training_service as training
 router=APIRouter()
 @router.post('/auth/login')
 def login(data:Login,db=Depends(session)):
@@ -15,7 +15,7 @@ def login(data:Login,db=Depends(session)):
     return {'token':issue(row),'username':row.username,'role':row.role}
 @router.get('/workspace')
 def workspace(db=Depends(session),user=Depends(current)):
-    return {m.__tablename__:[dump(v) for v in db.scalars(select(m).order_by(m.id))] for m in [Intake,Consent,Party,CaseParty,ConflictCheck,Triage,Requirement,Document,Agency,Referral,ServiceLog,Closure]}
+    return {m.__tablename__:[dump(v) for v in db.scalars(select(m).order_by(m.id))] for m in [Intake,Consent,Party,CaseParty,ConflictCheck,Triage,TrainingSample,TriageSample,Requirement,Document,Agency,Referral,ServiceLog,Closure]}
 @router.post('/intakes')
 def create(data:IntakeInput,db=Depends(session),user=Depends(editor)):return intake.create(db,data,user)
 @router.patch('/intakes/{id}/facts')
@@ -30,6 +30,10 @@ def check(data:CheckInput,db=Depends(session),user=Depends(editor)):return confl
 def enqueue(data:TriageInput,db=Depends(session),user=Depends(editor)):return triage.enqueue(db,data,user)
 @router.post('/triages/{id}/review')
 def review(id:int,data:ReviewInput,db=Depends(session),user=Depends(supervisor)):return triage.review(db,id,data,user)
+@router.post('/training-samples')
+def register_sample(data:SampleInput,db=Depends(session),user=Depends(supervisor)):return training.register_sample(db,data,user)
+@router.get('/triages/{id}/trace')
+def trace(id:int,db=Depends(session),user=Depends(current)):return training.trace(db,id)
 @router.post('/documents')
 def submit(data:DocumentInput,db=Depends(session),user=Depends(editor)):return document.submit(db,data,user)
 @router.post('/documents/{id}/verify')

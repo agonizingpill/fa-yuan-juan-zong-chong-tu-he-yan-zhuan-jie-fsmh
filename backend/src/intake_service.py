@@ -13,7 +13,16 @@ def consent(db,id,data,user):
     ref=active_referral(db,id)
     if not data.authorized and ref is not None:
         agency=get(db,Agency,ref.agency_id,True);agency.active_count-=1;ref.status='withdrawn';ref.note='来访人撤回授权，自动退回';case.status='open'
-    row.authorized=data.authorized;row.basis=data.basis;row.at=now();return finish(db,user,'授权更新',row)
+    row.authorized=data.authorized;row.basis=data.basis;row.at=now()
+    spawned=[]
+    if not data.authorized:
+        from . import training_service as training
+        from .triage_service import push
+        spawned=training.revoke_sample(db,id,'样本卷授权撤回，相关旧建议作废，撤回原话不再用于训练',user)
+        result=finish(db,user,'授权更新',row)
+        for new in spawned:push(db,new,user,'样本撤回触发重算')
+        return result
+    return finish(db,user,'授权更新',row)
 def authorized(db,id):
     row=db.scalar(select(Consent).where(Consent.intake_id==id))
     return row is not None and row.authorized

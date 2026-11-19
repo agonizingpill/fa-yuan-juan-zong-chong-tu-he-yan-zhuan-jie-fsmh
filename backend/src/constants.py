@@ -17,3 +17,12 @@ class ReferralState(StrEnum):
     accepted='accepted'
     withdrawn='withdrawn'
     completed='completed'
+class TriageState(StrEnum):
+    queued='queued'
+    running='running'
+    done='done'
+    reviewed='reviewed'
+    invalid='invalid'
+class SampleState(StrEnum):
+    active='active'
+    revoked='revoked'
